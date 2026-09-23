@@ -388,6 +388,18 @@ KeInvalidateTlbEntry(IN PVOID Address)
     __invlpg(Address);
 }
 
+//
+// Invalidates the TLB entry for a specified address on all processors that
+// might cache it
+//
+FORCEINLINE
+VOID
+KeFlushSingleTb(IN PVOID Address)
+{
+    /* FIXME: Only the current processor is handled */
+    __invlpg(Address);
+}
+
 FORCEINLINE
 VOID
 KeFlushProcessTb(VOID)

@@ -114,10 +114,11 @@ KiIdleLoop(VOID)
         YieldProcessor();
         _disable();
 
-        /* Check for pending timers, pending DPCs, or pending ready threads */
+        /* Check for pending timers, DPCs, ready threads or a DPC request */
         if ((Prcb->DpcData[0].DpcQueueDepth) ||
             (Prcb->TimerRequest) ||
-            (Prcb->DeferredReadyListHead.Next))
+            (Prcb->DeferredReadyListHead.Next) ||
+            (Prcb->DpcInterruptRequested))
         {
             /* Quiesce the DPC software interrupt */
             HalClearSoftwareInterrupt(DISPATCH_LEVEL);
@@ -132,24 +133,35 @@ KiIdleLoop(VOID)
             /* Enable interrupts */
             _enable();
 
-            /* Capture current thread data */
-            OldThread = Prcb->CurrentThread;
-            NewThread = Prcb->NextThread;
-
-            /* Set new thread data */
-            Prcb->NextThread = NULL;
-            Prcb->CurrentThread = NewThread;
-
-            /* The thread is now running */
-            NewThread->State = Running;
-
 #ifdef CONFIG_SMP
             /* Do the swap at SYNCH_LEVEL */
             KfRaiseIrql(SYNCH_LEVEL);
 #endif
 
-            /* Switch away from the idle thread */
-            KiSwapContext(APC_LEVEL, OldThread);
+            /* Acquire the PRCB lock and check again */
+            KiAcquirePrcbLock(Prcb);
+
+            NewThread = Prcb->NextThread;
+            if (NewThread)
+            {
+                /* Capture current thread data */
+                OldThread = Prcb->CurrentThread;
+
+                /* Set new thread data */
+                Prcb->NextThread = NULL;
+                Prcb->CurrentThread = NewThread;
+
+                /* The thread is now running */
+                NewThread->State = Running;
+
+                /* Switch away from the idle thread */
+                KiReleasePrcbLock(Prcb);
+                KiSwapContext(APC_LEVEL, OldThread);
+            }
+            else
+            {
+                KiReleasePrcbLock(Prcb);
+            }
 
 #ifdef CONFIG_SMP
             /* Go back to DISPATCH_LEVEL */

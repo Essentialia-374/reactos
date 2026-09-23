@@ -1167,7 +1167,7 @@ KdbpInternalEnter(
 {
     PETHREAD Thread;
     PVOID SavedInitialStack, SavedStackBase, SavedKernelStack;
-    ULONG SavedStackLimit;
+    ULONG_PTR SavedStackLimit;
 
     KbdDisableMouse();
 

@@ -608,12 +608,13 @@ KiRetireDpcList(IN PKPRCB Prcb)
                 RemoveEntryList(DpcEntry);
                 Dpc = CONTAINING_RECORD(DpcEntry, KDPC, DpcListEntry);
 
-                /* Clear its DPC data and save its parameters */
-                Dpc->DpcData = NULL;
+                /* Save its parameters, then clear its DPC data (it can be
+                   queued again right after that) */
                 DeferredRoutine = Dpc->DeferredRoutine;
                 DeferredContext = Dpc->DeferredContext;
                 SystemArgument1 = Dpc->SystemArgument1;
                 SystemArgument2 = Dpc->SystemArgument2;
+                InterlockedExchangePointer(&Dpc->DpcData, NULL);
 
                 /* Decrease the queue depth */
                 DpcData->DpcQueueDepth--;
@@ -751,9 +752,6 @@ KeInsertQueueDpc(IN PKDPC Dpc,
         Cpu = Prcb->Number;
     }
 
-    /* ROS Sanity Check */
-    ASSERT(Prcb == CurrentPrcb);
-
     /* Check if this is a threaded DPC and threaded DPCs are enabled */
     if ((Dpc->Type == ThreadedDpcObject) && (Prcb->ThreadDpcEnable))
     {
@@ -811,14 +809,12 @@ KeInsertQueueDpc(IN PKDPC Dpc,
                 {
                     /*
                      * Check if the DPC is of high importance or above the
-                     * maximum depth. If it is, then make sure that the CPU
-                     * isn't idle, or that it's sleeping.
+                     * maximum depth. If it is, request the DPC interrupt,
+                     * the IPI also wakes up an idle processor.
                      */
-                    if (((Dpc->Importance == HighImportance) ||
+                    if ((Dpc->Importance == HighImportance) ||
                         (DpcData->DpcQueueDepth >=
-                         Prcb->MaximumDpcQueueDepth)) &&
-                        (!(AFFINITY_MASK(Cpu) & KiIdleSummary) ||
-                         (Prcb->Sleeping)))
+                         Prcb->MaximumDpcQueueDepth))
                     {
                         /* Set interrupt requested */
                         Prcb->DpcInterruptRequested = TRUE;
@@ -878,7 +874,7 @@ NTAPI
 KeRemoveQueueDpc(IN PKDPC Dpc)
 {
     PKDPC_DATA DpcData;
-    BOOLEAN Enable;
+    BOOLEAN Enable, Removed = FALSE;
     ASSERT_DPC(Dpc);
 
     /* Disable interrupts */
@@ -898,6 +894,7 @@ KeRemoveQueueDpc(IN PKDPC Dpc)
             DpcData->DpcQueueDepth--;
             RemoveEntryList(&Dpc->DpcListEntry);
             Dpc->DpcData = NULL;
+            Removed = TRUE;
         }
 
         /* Release the lock */
@@ -907,8 +904,8 @@ KeRemoveQueueDpc(IN PKDPC Dpc)
     /* Re-enable interrupts */
     KeRestoreInterrupts(Enable);
 
-    /* Return if the DPC was in the queue or not */
-    return DpcData ? TRUE : FALSE;
+    /* Return if we removed it, another processor may have retired it already */
+    return Removed;
 }
 
 /*

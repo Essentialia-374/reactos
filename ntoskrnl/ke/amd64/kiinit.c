@@ -133,8 +133,6 @@ KiInitializePcr(
     /* Set TssBase */
     Pcr->TssBase = TssBase;
 
-    Pcr->Prcb.RspBase = Pcr->TssBase->Rsp0; // FIXME
-
     /* Set DPC Stack */
     Pcr->Prcb.DpcStack = DpcStack;
 
@@ -310,6 +308,9 @@ KiInitializeProcessorBootStructures(
                     KernelStack,
                     DoubleFaultStack,
                     NmiStack);
+
+    /* Set the stack base from the TSS */
+    Pcr->Prcb.RspBase = TssBase->Rsp0;
 }
 
 CODE_SEG("INIT")
@@ -499,8 +500,8 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     FrLdrDbgPrint = LoaderBlock->u.I386.CommonDataArea;
     //FrLdrDbgPrint("Hello from KiSystemStartup!!!\n");
 
-    /* Get the current CPU number */
-    Cpu = KeNumberProcessors++; // FIXME
+    /* Processors are started one at a time */
+    Cpu = KeNumberProcessors;
 
     /* LoaderBlock initialization for Cpu 0 */
     if (Cpu == 0)
@@ -518,6 +519,10 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Set the PRCB for this Processor */
     KiProcessorBlock[Cpu] = &Pcr->Prcb;
 
+    /* Count the processor after publishing the PRCB */
+    KeMemoryBarrier();
+    KeNumberProcessors = Cpu + 1;
+
     /* Save the initial thread */
     InitialThread = (PKTHREAD)LoaderBlock->Thread;
 
@@ -526,6 +531,8 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Initialize the CPU features */
     KiInitializeCpu(Pcr);
+
+    ASSERT(Pcr->Prcb.Number == Cpu);
 
     /* Initial setup for the boot CPU */
     if (Cpu == 0)
@@ -551,8 +558,8 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Initialize the Processor with HAL */
     HalInitializeProcessor(Cpu, KeLoaderBlock);
 
-    /* Set processor as active */
-    KeActiveProcessors |= 1ULL << Cpu;
+    /* APs set themselves active in KiSystemStartupBootStack */
+    if (Cpu == 0) KeActiveProcessors |= 1ULL << Cpu;
 
     /* Release lock */
     InterlockedAnd64((PLONG64)&KiFreezeExecutionLock, 0);

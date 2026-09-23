@@ -36,10 +36,11 @@ KiDpcInterruptHandler(VOID)
     /* Send an EOI */
     KiSendEOI();
 
-    /* Check for pending timers, pending DPCs, or pending ready threads */
+    /* Check for pending timers, DPCs, ready threads or a DPC request */
     if ((Prcb->DpcData[0].DpcQueueDepth) ||
         (Prcb->TimerRequest) ||
-        (Prcb->DeferredReadyListHead.Next))
+        (Prcb->DeferredReadyListHead.Next) ||
+        (Prcb->DpcInterruptRequested))
     {
         /* Retire DPCs while under the DPC stack */
         KiRetireDpcListInDpcStack(Prcb, Prcb->DpcStack);
@@ -57,12 +58,20 @@ KiDpcInterruptHandler(VOID)
     }
     else if (Prcb->NextThread)
     {
+#ifdef CONFIG_SMP
+        /* Do the swap at SYNCH_LEVEL */
+        KfRaiseIrql(SYNCH_LEVEL);
+#endif
+
         /* Acquire the PRCB lock */
         KiAcquirePrcbLock(Prcb);
 
         /* Capture current thread data */
         OldThread = Prcb->CurrentThread;
         NewThread = Prcb->NextThread;
+
+        /* The old thread gets queued below, keep others off it until we switched */
+        KiSetThreadSwapBusy(OldThread);
 
         /* Set new thread data */
         Prcb->NextThread = NULL;

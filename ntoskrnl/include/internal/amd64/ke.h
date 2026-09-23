@@ -277,6 +277,25 @@ KeInvalidateTlbEntry(IN PVOID Address)
     __invlpg(Address);
 }
 
+#ifdef CONFIG_SMP
+
+//
+// Flushes the non-global TLB entries on all processors
+//
+VOID
+NTAPI
+KeFlushProcessTb(VOID);
+
+//
+// Invalidates the TLB entry for a specified address on all processors
+//
+VOID
+NTAPI
+KeFlushSingleTb(
+    _In_ PVOID Address);
+
+#else
+
 FORCEINLINE
 VOID
 KeFlushProcessTb(VOID)
@@ -284,6 +303,17 @@ KeFlushProcessTb(VOID)
     /* Flush the TLB by resetting CR3 */
     __writecr3(__readcr3());
 }
+
+FORCEINLINE
+VOID
+KeFlushSingleTb(
+    _In_ PVOID Address)
+{
+    /* Invalidate the TLB entry for this address */
+    __invlpg(Address);
+}
+
+#endif // CONFIG_SMP
 
 FORCEINLINE
 VOID
@@ -423,6 +453,30 @@ VOID KiRaiseAssertion(VOID);
 VOID KiDebugServiceTrap(VOID);
 VOID KiDpcInterrupt(VOID);
 VOID KiIpiInterrupt(VOID);
+
+VOID
+NTAPI
+KiIpiProcessRequests(VOID);
+
+VOID
+NTAPI
+KiIpiWaitForPacketTargets(VOID);
+
+VOID
+KiFlushEntireCurrentTb(VOID);
+
+VOID
+KiInitializeProcessorBootStructures(
+    _In_ ULONG ProcessorNumber,
+    _Out_ PKIPCR Pcr,
+    _In_ PKGDTENTRY64 GdtBase,
+    _In_ PKIDTENTRY64 IdtBase,
+    _In_ PKTSS64 TssBase,
+    _In_ PKTHREAD IdleThread,
+    _In_ PVOID KernelStack,
+    _In_ PVOID DpcStack,
+    _In_ PVOID DoubleFaultStack,
+    _In_ PVOID NmiStack);
 
 VOID KiGdtPrepareForApplicationProcessorInit(ULONG Id);
 VOID Ki386InitializeLdt(VOID);

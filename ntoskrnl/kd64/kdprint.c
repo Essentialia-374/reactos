@@ -491,6 +491,19 @@ KdpPrint(
     OutputString.Buffer = String;
     OutputString.Length = OutputString.MaximumLength = Length;
 
+#if defined(CONFIG_SMP) && defined(_M_AMD64)
+    /* Print directly when called from within the debugger. The other processors
+       are frozen and may hold the log lock, and we can't reenter the debugger. */
+    if (KdEnteredDebugger &&
+        (KeGetCurrentIrql() >= DISPATCH_LEVEL) &&
+        (KeGetCurrentPrcb()->IpiFrozen & IPI_FROZEN_FLAG_ACTIVE))
+    {
+        KdpPrintString(&OutputString);
+        *Handled = TRUE;
+        return STATUS_SUCCESS;
+    }
+#endif
+
     /* Log the print */
     KdLogDbgPrint(&OutputString);
 

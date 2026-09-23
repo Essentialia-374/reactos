@@ -37,6 +37,9 @@
 
 PKPRCB KiFreezeOwner;
 
+/* Processors frozen by the current owner */
+static KAFFINITY KiFreezeTargetSet;
+
 /* FUNCTIONS *****************************************************************/
 
 BOOLEAN
@@ -53,11 +56,11 @@ KiProcessorFreezeHandler(
         return FALSE;
     }
 
-    /* We are frozen now */
-    CurrentPrcb->IpiFrozen = IPI_FROZEN_STATE_FROZEN;
-
-    /* Save the processor state */
+    /* Save the state before reporting frozen, the owner reads it */
     KiSaveProcessorState(TrapFrame, ExceptionFrame);
+
+    /* We are frozen now */
+    InterlockedExchange((PLONG)&CurrentPrcb->IpiFrozen, IPI_FROZEN_STATE_FROZEN);
 
     /* Wait for the freeze owner to release us */
     while (CurrentPrcb->IpiFrozen != IPI_FROZEN_STATE_THAW)
@@ -70,13 +73,11 @@ KiProcessorFreezeHandler(
             /* Enter the debugger */
             ContinueStatus = KdReportProcessorChange();
 
-            /* Set the state back to frozen */
-            CurrentPrcb->IpiFrozen = IPI_FROZEN_STATE_FROZEN;
-
-            /* If the status is ContinueSuccess, we need to release the freeze owner */
+            /* Otherwise KxSwitchKdProcessor already handed over, don't touch our state */
             if (ContinueStatus == ContinueSuccess)
             {
-                /* Release the freeze owner */
+                /* Back to frozen, then release the owner */
+                CurrentPrcb->IpiFrozen = IPI_FROZEN_STATE_FROZEN;
                 KiFreezeOwner->IpiFrozen = IPI_FROZEN_STATE_THAW;
             }
         }
@@ -84,6 +85,9 @@ KiProcessorFreezeHandler(
         YieldProcessor();
         KeMemoryBarrier();
     }
+
+    /* The debugger may have changed mappings, see KiFlushTbAllProcessors */
+    KiFlushEntireCurrentTb();
 
     /* Restore the processor state */
     KiRestoreProcessorState(TrapFrame, ExceptionFrame);
@@ -123,11 +127,14 @@ KxFreezeExecution(
     /* We are the owner now and active */
     CurrentPrcb->IpiFrozen = IPI_FROZEN_STATE_OWNER | IPI_FROZEN_FLAG_ACTIVE;
 
-    /* Loop all processors */
+    /* Freeze all other active processors */
+    KiFreezeTargetSet = KeActiveProcessors & ~CurrentPrcb->SetMember;
+
+    /* Loop all target processors */
     for (ULONG i = 0; i < KeNumberProcessors; i++)
     {
         PKPRCB TargetPrcb = KiProcessorBlock[i];
-        if (TargetPrcb != CurrentPrcb)
+        if (KiFreezeTargetSet & AFFINITY_MASK(i))
         {
             /* Only the active processor is allowed to change IpiFrozen */
             ASSERT(TargetPrcb->IpiFrozen == IPI_FROZEN_STATE_RUNNING);
@@ -138,13 +145,16 @@ KxFreezeExecution(
     }
 
     /* Send the freeze IPI */
-    KiIpiSend(KeActiveProcessors & ~CurrentPrcb->SetMember, IPI_FREEZE);
+    if (KiFreezeTargetSet != 0)
+    {
+        KiIpiSend(KiFreezeTargetSet, IPI_FREEZE);
+    }
 
     /* Wait for all targets to be frozen */
     for (ULONG i = 0; i < KeNumberProcessors; i++)
     {
         PKPRCB TargetPrcb = KiProcessorBlock[i];
-        if (TargetPrcb != CurrentPrcb)
+        if (KiFreezeTargetSet & AFFINITY_MASK(i))
         {
             /* Wait for the target to be frozen */
             while (TargetPrcb->IpiFrozen != IPI_FROZEN_STATE_FROZEN)
@@ -166,11 +176,11 @@ KxThawExecution(
     PKPRCB CurrentPrcb = KeGetCurrentPrcb();
     ASSERT(CurrentPrcb->IpiFrozen & IPI_FROZEN_FLAG_ACTIVE);
 
-    /* Loop all processors */
+    /* Loop all frozen processors */
     for (ULONG i = 0; i < KeNumberProcessors; i++)
     {
         PKPRCB TargetPrcb = KiProcessorBlock[i];
-        if (TargetPrcb != CurrentPrcb)
+        if (KiFreezeTargetSet & AFFINITY_MASK(i))
         {
             /* Make sure they are still frozen */
             ASSERT(TargetPrcb->IpiFrozen == IPI_FROZEN_STATE_FROZEN);
@@ -184,7 +194,7 @@ KxThawExecution(
     for (ULONG i = 0; i < KeNumberProcessors; i++)
     {
         PKPRCB TargetPrcb = KiProcessorBlock[i];
-        if (TargetPrcb != CurrentPrcb)
+        if (KiFreezeTargetSet & AFFINITY_MASK(i))
         {
             /* Wait for the target to be running again */
             while (TargetPrcb->IpiFrozen != IPI_FROZEN_STATE_RUNNING)
@@ -212,6 +222,13 @@ KxSwitchKdProcessor(
 
     /* Make sure that the processor index is valid */
     ASSERT(ProcessorIndex < KeNumberProcessors);
+
+    /* Only frozen processors or the owner */
+    if (!(KiFreezeTargetSet & AFFINITY_MASK(ProcessorIndex)) &&
+        (KiProcessorBlock[ProcessorIndex] != KiFreezeOwner))
+    {
+        return ContinueProcessorReselected;
+    }
 
     /* We are no longer active */
     ASSERT(CurrentPrcb->IpiFrozen & IPI_FROZEN_FLAG_ACTIVE);

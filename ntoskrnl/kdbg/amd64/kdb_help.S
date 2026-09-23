@@ -5,24 +5,28 @@
 
 .code64
 
+/*
+ * VOID KdbpStackSwitchAndCall(PVOID NewStack<rcx>, VOID (*Function)(VOID)<rdx>)
+ */
 PUBLIC KdbpStackSwitchAndCall
 KdbpStackSwitchAndCall:
 
     /* Save old stack */
     mov rax, rsp
 
-    /* Set new stack */
+    /* Set new stack, aligned to 16 bytes */
+    and rcx, -16
     mov rsp, rcx
 
-    /* Save old stack on new stack */
-    push rax
+    /* Home space for the callee and a slot for the old stack */
+    sub rsp, HEX(30)
+    mov [rsp + HEX(20)], rax
 
     /* Call function */
     call rdx
 
     /* Restore old stack */
-    pop rax
-    mov rsp, rax
+    mov rsp, [rsp + HEX(20)]
 
     /* Return */
     ret

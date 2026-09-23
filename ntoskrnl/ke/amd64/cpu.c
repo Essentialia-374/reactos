@@ -559,23 +559,200 @@ KiRestoreProcessorState(
 }
 
 VOID
+KiFlushEntireCurrentTb(VOID)
+{
+    ULONG64 Cr4 = __readcr4();
+
+    /* Check if global pages are enabled */
+    if (Cr4 & CR4_PGE)
+    {
+        /* Toggling PGE also flushes global entries */
+        __writecr4(Cr4 & ~CR4_PGE);
+        __writecr4(Cr4);
+    }
+    else
+    {
+        /* Flush the TLB by resetting CR3 */
+        __writecr3(__readcr3());
+    }
+}
+
+#ifdef CONFIG_SMP
+static
+VOID
+NTAPI
+KiFlushTargetEntireTb(
+    _In_ PKIPI_CONTEXT PacketContext,
+    _In_ PVOID Ignored1,
+    _In_ PVOID Ignored2,
+    _In_ PVOID Ignored3)
+{
+    UNREFERENCED_PARAMETER(Ignored1);
+    UNREFERENCED_PARAMETER(Ignored2);
+    UNREFERENCED_PARAMETER(Ignored3);
+
+    KiFlushEntireCurrentTb();
+    KiIpiSignalPacketDone(PacketContext);
+}
+#endif
+
+#ifdef CONFIG_SMP
+/*
+ * TRUE if we are the debugger processor and the others are frozen. Frozen
+ * processors flush their TB when thawed, so a local flush is enough.
+ */
+static
+BOOLEAN
+KiIsDebuggerActiveProcessor(VOID)
+{
+    /* The debugger runs at >= DISPATCH_LEVEL, no migration possible */
+    if (KeGetCurrentIrql() < DISPATCH_LEVEL)
+        return FALSE;
+
+    return (KeGetCurrentPrcb()->IpiFrozen & IPI_FROZEN_FLAG_ACTIVE) != 0;
+}
+
+static
+VOID
+NTAPI
+KiFlushTargetProcessTb(
+    _In_ PKIPI_CONTEXT PacketContext,
+    _In_ PVOID Ignored1,
+    _In_ PVOID Ignored2,
+    _In_ PVOID Ignored3)
+{
+    UNREFERENCED_PARAMETER(Ignored1);
+    UNREFERENCED_PARAMETER(Ignored2);
+    UNREFERENCED_PARAMETER(Ignored3);
+
+    __writecr3(__readcr3());
+    KiIpiSignalPacketDone(PacketContext);
+}
+
+static
+VOID
+NTAPI
+KiFlushTargetSingleTb(
+    _In_ PKIPI_CONTEXT PacketContext,
+    _In_ PVOID Ignored1,
+    _In_ PVOID Address,
+    _In_ PVOID Ignored3)
+{
+    UNREFERENCED_PARAMETER(Ignored1);
+    UNREFERENCED_PARAMETER(Ignored3);
+
+    __invlpg(Address);
+    KiIpiSignalPacketDone(PacketContext);
+}
+
+/* Flush the TB (or one entry) on all active processors */
+static
+VOID
+KiFlushTbAllProcessors(
+    _In_ PKIPI_WORKER Worker,
+    _In_opt_ PVOID Address)
+{
+    KIRQL OldIrql;
+    KAFFINITY TargetSet;
+    PKPRCB Prcb;
+
+    if (KiIsDebuggerActiveProcessor())
+    {
+        if (Address != NULL)
+            __invlpg(Address);
+        else
+            __writecr3(__readcr3());
+        return;
+    }
+
+    OldIrql = KeRaiseIrqlToSynchLevel();
+
+    Prcb = KeGetCurrentPrcb();
+    TargetSet = KeActiveProcessors & ~Prcb->SetMember;
+    if (TargetSet != 0)
+    {
+        KiIpiSendPacket(TargetSet, Worker, NULL, (ULONG_PTR)Address, NULL);
+    }
+
+    if (Address != NULL)
+        __invlpg(Address);
+    else
+        __writecr3(__readcr3());
+
+    if (TargetSet != 0)
+    {
+        KiIpiWaitForPacketTargets();
+    }
+
+    KeLowerIrql(OldIrql);
+}
+
+VOID
+NTAPI
+KeFlushProcessTb(VOID)
+{
+    KiFlushTbAllProcessors(KiFlushTargetProcessTb, NULL);
+}
+
+VOID
+NTAPI
+KeFlushSingleTb(
+    _In_ PVOID Address)
+{
+    ASSERT(Address != NULL);
+    KiFlushTbAllProcessors(KiFlushTargetSingleTb, Address);
+}
+#endif // CONFIG_SMP
+
+VOID
 NTAPI
 KeFlushEntireTb(IN BOOLEAN Invalid,
                 IN BOOLEAN AllProcessors)
 {
     KIRQL OldIrql;
+#ifdef CONFIG_SMP
+    KAFFINITY TargetSet;
+    PKPRCB Prcb;
+#endif
 
-    // FIXME: halfplemented
+    UNREFERENCED_PARAMETER(Invalid);
+    UNREFERENCED_PARAMETER(AllProcessors);
+
+#ifdef CONFIG_SMP
+    if (KiIsDebuggerActiveProcessor())
+    {
+        KiFlushEntireCurrentTb();
+        return;
+    }
+#endif
+
     /* Raise the IRQL for the TB Flush */
     OldIrql = KeRaiseIrqlToSynchLevel();
 
-    /* Flush the TB for the Current CPU, and update the flush stamp */
-    KeFlushCurrentTb();
+#ifdef CONFIG_SMP
+    Prcb = KeGetCurrentPrcb();
+    TargetSet = KeActiveProcessors & ~Prcb->SetMember;
+
+    if (TargetSet != 0)
+    {
+        KiIpiSendPacket(TargetSet, KiFlushTargetEntireTb, NULL, 0, NULL);
+    }
+#endif
+
+    KiFlushEntireCurrentTb();
+
+#ifdef CONFIG_SMP
+    /* Wait for the other processors to finish */
+    if (TargetSet != 0)
+    {
+        ASSERT(Prcb == KeGetCurrentPrcb());
+        KiIpiWaitForPacketTargets();
+    }
+#endif
 
     /* Update the flush stamp and return to original IRQL */
     InterlockedExchangeAdd(&KiTbFlushTimeStamp, 1);
     KeLowerIrql(OldIrql);
-
 }
 
 NTSTATUS

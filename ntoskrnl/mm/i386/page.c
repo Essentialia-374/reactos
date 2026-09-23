@@ -293,7 +293,7 @@ MmDeleteVirtualMappingEx(
         PointerPte = MiAddressToPte(Address);
         OldPte.u.Long = InterlockedExchangePte(PointerPte, 0);
 
-        KeInvalidateTlbEntry(Address);
+        KeFlushSingleTb(Address);
 
         if (OldPte.u.Long != 0)
         {
@@ -880,7 +880,7 @@ MmSetPageProtect(PEPROCESS Process, PVOID Address, ULONG flProtect)
     }
 
     if (OldPte.u.Long != TempPte.u.Long)
-        KeInvalidateTlbEntry(Address);
+        KeFlushSingleTb(Address);
 
     MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
 }
@@ -914,7 +914,7 @@ MmSetDirtyBit(PEPROCESS Process, PVOID Address, BOOLEAN Bit)
     PointerPte->u.Hard.Dirty = !!Bit;
 
     if (!Bit)
-        KeInvalidateTlbEntry(Address);
+        KeFlushSingleTb(Address);
 
     MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
 }

@@ -200,8 +200,19 @@ KiSystemStartupBootStack(VOID)
     if (!Prcb->NextThread) KiIdleSummary |= (ULONG_PTR)1 << Prcb->Number;
     KiReleasePrcbLock(Prcb);
 
-    /* Raise back to HIGH_LEVEL and clear the PRCB for the loader block */
+    /* Raise back to HIGH_LEVEL */
     KfRaiseIrql(HIGH_LEVEL);
+
+    if (Prcb->Number != 0)
+    {
+        /* APs join the active set only now, when they can handle IPIs */
+        InterlockedOr64((PLONG64)&KeActiveProcessors, Prcb->SetMember);
+
+        /* We missed earlier TB flushes */
+        KiFlushEntireCurrentTb();
+    }
+
+    /* Tell KeStartAllProcessors we are done */
     LoaderBlock->Prcb = 0;
 
     /* Set the priority of this thread to 0 */

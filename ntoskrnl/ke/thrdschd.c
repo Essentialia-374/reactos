@@ -299,13 +299,23 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     OldPriority = Thread->Priority;
     Thread->Preempted = FALSE;
 
-    /* Select a processor to run on */
+#ifdef CONFIG_SMP
+    /* Keep the thread lock until NextProcessor is set and its PRCB is locked,
+       to serialize with KiUpdateEffectiveAffinityThread */
+    KiAcquireThreadLock(Thread);
+#endif
+
+    /* Select a processor to run on, get its PRCB and lock it */
     Processor = KiSelectNextProcessor(Thread);
     Thread->NextProcessor = Processor;
-
-    /* Get the PRCB and lock it */
     Prcb = KiProcessorBlock[Processor];
     KiAcquirePrcbLock(Prcb);
+
+#ifdef CONFIG_SMP
+    /* Release the thread lock */
+    ASSERT(Prcb->SetMember & Thread->Affinity);
+    KiReleaseThreadLock(Thread);
+#endif
 
 #ifndef CONFIG_SMP
     /* Check if we have an idle summary */

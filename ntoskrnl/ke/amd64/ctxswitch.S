@@ -176,6 +176,11 @@ PUBLIC KiUserThreadStartupExit
     .allocstack (6 * 8)
     .endprolog
 
+    /* Switching to ourselves (readied again while waiting): our own
+       SwapBusy is set, don't wait for it */
+    cmp r8, rdx
+    je .SwapBusyClear
+
     /* Wait for SwapBusy */
 .SwapBusySet:
     cmp byte ptr [r8 + ThSwapBusy], 0

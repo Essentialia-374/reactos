@@ -529,10 +529,10 @@ KiTryThreadLock(IN PKTHREAD Thread)
 {
     LONG Value;
 
-    /* If the lock isn't acquired, return false */
-    if (!Thread->ThreadLock) return FALSE;
+    /* Fail if the lock is already held */
+    if (Thread->ThreadLock) return TRUE;
 
-    /* Otherwise, try to acquire it and check the result */
+    /* Otherwise, try to acquire it */
     Value = 1;
     Value = InterlockedExchange((PLONG)&Thread->ThreadLock, Value);
 

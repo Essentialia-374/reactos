@@ -18,6 +18,7 @@ static ULONG KdbgNextApiNumber = DbgKdContinueApi;
 static CONTEXT KdbgContext;
 static EXCEPTION_RECORD64 KdbgExceptionRecord;
 static BOOLEAN KdbgFirstChanceException;
+static USHORT KdbgProcessor;
 static NTSTATUS KdbgContinueStatus = STATUS_SUCCESS;
 
 /* FUNCTIONS *****************************************************************/
@@ -100,6 +101,7 @@ KdSendPacket(
             KdbgNextApiNumber = DbgKdGetContextApi;
             KdbgExceptionRecord = WaitStateChange->u.Exception.ExceptionRecord;
             KdbgFirstChanceException = WaitStateChange->u.Exception.FirstChance;
+            KdbgProcessor = WaitStateChange->Processor;
             return;
         }
     }
@@ -180,6 +182,8 @@ KdReceivePacket(
         if (KdbgNextApiNumber == DbgKdGetContextApi)
         {
             ManipulateState->ApiNumber = DbgKdGetContextApi;
+            /* Get the context of the processor that broke in */
+            ManipulateState->Processor = KdbgProcessor;
             MessageData->Length = 0;
             MessageData->Buffer = (PCHAR)&KdbgContext;
             return KdPacketReceived;
@@ -187,6 +191,7 @@ KdReceivePacket(
         else if (KdbgNextApiNumber == DbgKdSetContextApi)
         {
             ManipulateState->ApiNumber = DbgKdSetContextApi;
+            ManipulateState->Processor = KdbgProcessor;
             MessageData->Length = sizeof(KdbgContext);
             MessageData->Buffer = (PCHAR)&KdbgContext;
             return KdPacketReceived;
